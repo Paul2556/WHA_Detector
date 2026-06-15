@@ -1,0 +1,7 @@
+{
+    "name": "column",
+    "components": {
+        "column": 1
+    },
+    "examples": 10
+}

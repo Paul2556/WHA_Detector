@@ -1,0 +1,9 @@
+{
+    "name": "water_sigil",
+    "components": {
+        "water": 2,
+        "water_sigil": 1,
+        "wave": 1
+    },
+    "examples": 14
+}

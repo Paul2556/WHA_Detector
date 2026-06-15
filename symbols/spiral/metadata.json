@@ -1,0 +1,7 @@
+{
+    "name": "spiral",
+    "components": {
+        "spiral": 1
+    },
+    "examples": 2
+}
