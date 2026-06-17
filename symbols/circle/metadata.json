@@ -1,7 +1,7 @@
 {
     "name": "circle",
     "components": {
-        "circle": 2
+        "water": 2
     },
-    "examples": 3
+    "examples": 4
 }

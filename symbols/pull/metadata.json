@@ -1,9 +1,8 @@
 {
     "name": "pull",
     "components": {
-        "line": 1,
-        "triangle": 1,
-        "water_sigil": 1
+        "pull": 2,
+        "water": 1
     },
-    "examples": 5
+    "examples": 6
 }

@@ -1,0 +1,7 @@
+{
+    "name": "fire_sigil",
+    "components": {
+        "triangle": 2
+    },
+    "examples": 6
+}

@@ -1,7 +1,7 @@
 {
     "name": "float",
     "components": {
-        "float": 1
+        "float": 2
     },
-    "examples": 7
+    "examples": 8
 }

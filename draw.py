@@ -1,6 +1,8 @@
 import tkinter as tk
 from PIL import Image, ImageDraw
 import cv2
+import time
+import numpy as np
 
 import main
 
@@ -17,6 +19,8 @@ class DrawingCanvas:
         self.root = root
 
         self.dark_mode = False
+        self._last_classify = 0.0
+        self._classify_interval = 0.5  # seconds; throttle auto-classify to reduce I/O
 
         tk.Button(
             root,
@@ -92,18 +96,12 @@ class DrawingCanvas:
         ).pack()
 
     def classify_override(self):
-
         global library
 
-        self.image.save(
-            "test.png"
-        )
-
+        # use in-memory image data to find contours instead of saving to disk
         try:
-
-            contours = main.get_contour(
-                "test.png"
-            )
+            arr = np.array(self.image)
+            contours = main.get_contour_from_array(arr)
 
             popup = tk.Toplevel(
                 self.root
@@ -138,6 +136,9 @@ class DrawingCanvas:
                 if not symbol_name:
                     return
 
+                # persist a copy for the library example
+                self.image.save("test.png")
+
                 main.save_symbol_example(
                     "test.png",
                     symbol_name
@@ -160,7 +161,7 @@ class DrawingCanvas:
                             component_name
                         )
 
-                    except:
+                    except Exception:
                         pass
 
                 main.update_symbol_metadata(
@@ -170,6 +171,14 @@ class DrawingCanvas:
 
                 library = (
                     main.load_symbol_library()
+                )
+
+                main.write_classification_status(
+                    symbol_name,
+                    0,
+                    state=main.classification_state_from_name(symbol_name),
+                    source="draw.classify_override",
+                    details="manual override save"
                 )
 
                 self.result_label.config(
@@ -313,35 +322,30 @@ class DrawingCanvas:
 
         global library
 
-        self.image.save(
-            "test.png"
-        )
+        # save a file for potential example saving, but classify from memory
+        self.image.save("test.png")
 
         try:
 
-            contours = main.get_contour(
-                "test.png"
-            )
+            arr = np.array(self.image)
+            contours = main.get_contour_from_array(arr)
 
             contour = max(
                 contours,
                 key=cv2.contourArea
             )
 
-            name, score = main.classify(
+            name, score, rotation = main.classify_with_rotation(
                 contour,
                 library
             )
 
-            rotation = None
-
-            if name == "arrow":
-
-                rotation = main.get_arrow_rotation(
-                    contour
-                )
-
-                main.debug_arrow_tip(contour)
+            if name and "arrow" in name:
+                # keep detailed arrow debug when arrow-like
+                try:
+                    main.debug_arrow_tip(contour)
+                except Exception:
+                    pass
 
             top_matches = main.get_top_matches(
                 contour,
@@ -426,6 +430,19 @@ class DrawingCanvas:
                     default_name=name
                 )
 
+            direction = None
+            if rotation is not None:
+                direction = main.rotation_to_direction(rotation)
+
+            main.write_classification_status(
+                name,
+                score,
+                source="draw.save_image",
+                details=f"top_matches={[(symbol, float(symbol_score)) for symbol, symbol_score in top_matches]}",
+                rotation=rotation,
+                direction=direction
+            )
+
         except Exception as e:
 
             self.result_label.config(
@@ -433,6 +450,8 @@ class DrawingCanvas:
             )
 
             print(e)
+        
+        self.clear_canvas()
 
     def ask_for_symbol_name(
         self,
@@ -477,14 +496,16 @@ class DrawingCanvas:
             if not symbol_name:
                 return
 
+            # persist a copy for the library example
+            self.image.save("test.png")
+
             main.save_symbol_example(
                 "test.png",
                 symbol_name
             )
 
-            contours = main.get_contour(
-                "test.png"
-            )
+            arr = np.array(self.image)
+            contours = main.get_contour_from_array(arr)
 
             components = []
 
@@ -531,32 +552,27 @@ class DrawingCanvas:
 
         global library
 
+        # throttle frequent calls to reduce CPU/disk work
+        now = time.time()
+        if now - self._last_classify < self._classify_interval:
+            return
+
+        self._last_classify = now
+
         try:
+            arr = np.array(self.image)
 
-            self.image.save(
-                "test.png"
-            )
-
-            contours = main.get_contour(
-                "test.png"
-            )
+            contours = main.get_contour_from_array(arr)
 
             contour = max(
                 contours,
                 key=cv2.contourArea
             )
 
-            name, score = main.classify(
+            name, score, rotation = main.classify_with_rotation(
                 contour,
                 library
             )
-
-            rotation = None
-
-            if name == "arrow":
-                rotation = main.get_arrow_rotation(
-                    contour
-                )
 
             top_matches = main.get_top_matches(
                 contour,
@@ -600,18 +616,33 @@ class DrawingCanvas:
                 text=results
             )
 
-        except:
+            direction = None
+            if rotation is not None:
+                direction = main.rotation_to_direction(rotation)
+
+            main.write_classification_status(
+                name,
+                score,
+                source="draw.auto_classify",
+                details=results,
+                rotation=rotation,
+                direction=direction
+            )
+
+        except Exception:
             pass
 
 
-root = tk.Tk()
+if __name__ == "__main__":
+    root = tk.Tk()
+    main.set_app_icon(root)
 
-root.title(
-    "WHA Glyph Trainer"
-)
+    root.title(
+        "WHA Glyph Trainer"
+    )
 
-DrawingCanvas(
-    root
-)
+    DrawingCanvas(
+        root
+    )
 
-root.mainloop()
+    root.mainloop()

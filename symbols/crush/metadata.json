@@ -1,7 +1,8 @@
 {
     "name": "crush",
     "components": {
-        "crush": 1
+        "wave": 1,
+        "water_sigil": 1
     },
-    "examples": 14
+    "examples": 18
 }

@@ -2,10 +2,139 @@ import cv2
 import shutil
 import json
 import numpy as np
+import tempfile
+import tkinter as tk
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 UNKNOWN_THRESHOLD = 0.5
+SHARED_STATUS_FILE = Path("classification_status.json")
+
+
+def _create_tk_icon_image():
+    icon_data = [
+        "P3 16 16 255",
+    ]
+
+    for y in range(16):
+        row = []
+        for x in range(16):
+            dx = x - 7.5
+            dy = y - 7.5
+            radius = 6.5
+            if dx * dx + dy * dy <= radius * radius:
+                row.append("0 120 215")
+            else:
+                row.append("230 230 230")
+        icon_data.append(" ".join(row))
+
+    icon_data = "\n".join(icon_data)
+    return tk.PhotoImage(data=icon_data)
+
+
+def _write_temp_icon_file():
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return None
+
+    icon_path = Path(tempfile.gettempdir()) / "wha_detector_icon.png"
+    if icon_path.exists():
+        return str(icon_path)
+
+    img = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((8, 8, 120, 120), fill=(0, 120, 215, 255))
+    draw.ellipse((32, 32, 96, 96), fill=(255, 255, 255, 255))
+
+    try:
+        img.save(icon_path)
+        return str(icon_path)
+    except Exception:
+        return None
+
+
+def set_app_icon(root):
+    try:
+        image = _create_tk_icon_image()
+        root.iconphoto(False, image)
+        root._icon_image = image
+    except Exception:
+        pass
+
+    icon_path = _write_temp_icon_file()
+
+    if icon_path is None:
+        return
+
+    try:
+        from AppKit import NSImage, NSApplication
+
+        nsimage = NSImage.alloc().initWithContentsOfFile_(icon_path)
+        if nsimage is not None:
+            NSApplication.sharedApplication().setApplicationIconImage_(nsimage)
+    except Exception:
+        pass
+
+
+def classification_state_from_name(name):
+    normalized = name.lower()
+
+    if normalized == "prepared_circle" or "prepared" in normalized:
+        return "prepared"
+
+    if normalized == "circle" or "finished" in normalized:
+        return "finished"
+
+    return "unknown"
+
+
+def write_classification_status(
+    symbol_name,
+    score,
+    state=None,
+    source="draw",
+    details=None,
+    image_path="test.png",
+    rotation=None,
+    direction=None
+):
+    if state is None:
+        state = classification_state_from_name(symbol_name)
+
+    payload = {
+        "symbol_name": symbol_name,
+        "score": score,
+        "state": state,
+        "source": source,
+        "details": details or "",
+        "image_path": image_path,
+        "rotation": rotation,
+        "direction": direction,
+        "timestamp": datetime.now().isoformat()
+    }
+
+    try:
+        with SHARED_STATUS_FILE.open("w") as f:
+            json.dump(payload, f, indent=2)
+    except Exception as exc:
+        print(f"Failed to write classification status: {exc}")
+
+    return payload
+
+
+def read_classification_status():
+    if not SHARED_STATUS_FILE.exists():
+        return {}
+
+    try:
+        with SHARED_STATUS_FILE.open() as f:
+            return json.load(f)
+    except Exception as exc:
+        print(f"Failed to read classification status: {exc}")
+        return {}
+
 
 def debug_arrow_tip(contour):
 
@@ -410,6 +539,52 @@ def get_contour(image_path):
     return contours
 
 
+def get_contour_from_array(img_array):
+    """Accept a NumPy image array (RGB or BGR) and return contours.
+
+    This avoids saving the image to disk when the caller already has
+    the image in memory (e.g. from a PIL Image).
+    """
+    if img_array is None:
+        return []
+
+    # Convert to numpy array if PIL Image was provided
+    try:
+        import numpy as _np
+
+        img = _np.array(img_array)
+    except Exception:
+        img = img_array
+
+    # If image has 3 channels assume RGB and convert to grayscale
+    if len(img.shape) == 3 and img.shape[2] == 3:
+        # detect whether it's RGB (PIL) or BGR (cv)
+        # We'll try converting from RGB first then threshold
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img
+
+    _, thresh = cv2.threshold(
+        gray,
+        127,
+        255,
+        cv2.THRESH_BINARY_INV
+    )
+
+    contours, hierarchy = cv2.findContours(
+        thresh,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    contours = [
+        c for c in contours
+        if cv2.contourArea(c) > 50
+    ]
+
+    return contours
+
+
 def load_symbol_library(folder="symbols"):
 
     library = {}
@@ -480,26 +655,55 @@ def load_symbol_library(folder="symbols"):
 
 
 def classify(contour, library):
+    def hu_distance(c1, c2):
+        m1 = cv2.moments(c1)
+        m2 = cv2.moments(c2)
+
+        h1 = cv2.HuMoments(m1).flatten()
+        h2 = cv2.HuMoments(m2).flatten()
+
+        h1 = -np.sign(h1) * np.log10(np.abs(h1) + 1e-30)
+        h2 = -np.sign(h2) * np.log10(np.abs(h2) + 1e-30)
+
+        return float(np.sum(np.abs(h1 - h2)))
+
+    def bbox_ratio_diff(c1, c2):
+        x1, y1, w1, h1 = cv2.boundingRect(c1)
+        x2, y2, w2, h2 = cv2.boundingRect(c2)
+        r1 = w1 / (h1 if h1 != 0 else 1)
+        r2 = w2 / (h2 if h2 != 0 else 1)
+        return abs(r1 - r2)
+
     scores = []
 
     for name, templates in library.items():
 
+        best_score = float("inf")
+
         for template in templates:
 
-            score = cv2.matchShapes(
+            shape_score = cv2.matchShapes(
                 contour,
                 template,
                 cv2.CONTOURS_MATCH_I1,
                 0
             )
 
-            scores.append(
-                (name, score)
+            hu_score = hu_distance(contour, template)
+            br = bbox_ratio_diff(contour, template)
+
+            # combined score: prioritize matchShapes, include Hu and bbox ratio
+            combined = (
+                0.6 * shape_score
+                + 0.3 * (hu_score / (1.0 + hu_score))
+                + 0.1 * br
             )
 
-    scores.sort(
-        key=lambda x: x[1]
-    )
+            best_score = min(best_score, combined)
+
+        scores.append((name, best_score))
+
+    scores.sort(key=lambda x: x[1])
 
     best_name, best_score = scores[0]
 
@@ -511,6 +715,19 @@ def get_top_matches(
     library,
     limit=5
 ):
+    def hu_distance(c1, c2):
+        m1 = cv2.moments(c1)
+        m2 = cv2.moments(c2)
+
+        h1 = cv2.HuMoments(m1).flatten()
+        h2 = cv2.HuMoments(m2).flatten()
+
+        # use log transform to compress dynamic range
+        h1 = -np.sign(h1) * np.log10(np.abs(h1) + 1e-30)
+        h2 = -np.sign(h2) * np.log10(np.abs(h2) + 1e-30)
+
+        return float(np.sum(np.abs(h1 - h2)))
+
     scores = []
 
     for name, templates in library.items():
@@ -519,16 +736,31 @@ def get_top_matches(
 
         for template in templates:
 
-            score = cv2.matchShapes(
+            shape_score = cv2.matchShapes(
                 contour,
                 template,
                 cv2.CONTOURS_MATCH_I1,
                 0
             )
 
+            hu_score = hu_distance(contour, template)
+            # bbox ratio diff
+            x1, y1, w1, h1 = cv2.boundingRect(contour)
+            x2, y2, w2, h2 = cv2.boundingRect(template)
+            r1 = w1 / (h1 if h1 != 0 else 1)
+            r2 = w2 / (h2 if h2 != 0 else 1)
+            br = abs(r1 - r2)
+
+            # combined score: prioritize matchShapes, include Hu and bbox ratio
+            combined = (
+                0.6 * shape_score
+                + 0.3 * (hu_score / (1.0 + hu_score))
+                + 0.1 * br
+            )
+
             best_score = min(
                 best_score,
-                score
+                combined
             )
 
         scores.append(
@@ -551,7 +783,44 @@ def classify_with_rotation(
         library
     )
 
-    return name, score, None
+    # determine rotation/direction for directional symbols
+    directional_symbols = {
+        "arrow",
+        "wavy_arrow",
+        "wavyarrow",
+        "pull",
+        "push",
+        "column",
+        "crush",
+        "levitation",
+        "spiral"
+    }
+
+    rotation = None
+
+    try:
+        lname = name.lower()
+
+        if any(ds in lname for ds in directional_symbols):
+
+            if "arrow" in lname:
+                rotation = get_arrow_rotation(contour)
+            else:
+                # use principal axis via moments / PCA
+                pts = contour.reshape(-1, 2).astype(float)
+                mean = pts.mean(axis=0)
+                cov = np.cov((pts - mean).T)
+                try:
+                    vals, vecs = np.linalg.eig(cov)
+                    principal = vecs[:, np.argmax(vals)]
+                    rotation = np.degrees(np.arctan2(principal[1], principal[0]))
+                    rotation = (rotation + 360) % 360
+                except Exception:
+                    rotation = None
+    except Exception:
+        rotation = None
+
+    return name, score, rotation
 
 
 def corner_count(
