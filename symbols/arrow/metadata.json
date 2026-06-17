@@ -1,7 +1,5 @@
 {
     "name": "arrow",
-    "components": {
-        "arrow": 1
-    },
-    "examples": 22
+    "components": {},
+    "examples": 23
 }

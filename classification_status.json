@@ -1,11 +1,11 @@
 {
-  "symbol_name": "fire_sigil",
-  "score": 0.0,
+  "symbol_name": "arrow",
+  "score": 1.0957530041994612,
   "state": "unknown",
-  "source": "test",
-  "details": "",
+  "source": "draw.save_image",
+  "details": "top_matches=[('arrow', 1.0957530041994612), ('line', 2.3838568543510634), ('levitation', 2.568423436012813), ('67', 3.023551140570315), ('crush', 3.3251220203643013)]",
   "image_path": "test.png",
-  "rotation": null,
-  "direction": null,
-  "timestamp": "2026-06-17T10:28:49.557291"
+  "rotation": 57.30944603979334,
+  "direction": "\u2198",
+  "timestamp": "2026-06-17T10:34:21.906436"
 }

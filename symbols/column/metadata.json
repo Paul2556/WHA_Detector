@@ -1,7 +1,7 @@
 {
     "name": "column",
     "components": {
-        "column": 1
+        "circle": 1
     },
-    "examples": 14
+    "examples": 17
 }
